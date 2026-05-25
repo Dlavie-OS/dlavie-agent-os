@@ -7,6 +7,7 @@ export const CONFIG_FILE = path.join(ROOT, 'config.json');
 
 const DEFAULT_CONFIG = {
   BOT_NAME: 'Dlavie Agent OS',
+  WA_PROVIDER: 'meta-cloud',
   WA_PHONE_NUMBER: '628xxxxxxxxxx',
   OWNER_NUMBER: '628xxxxxxxxxx',
   OWNER_JIDS: [],
@@ -14,14 +15,11 @@ const DEFAULT_CONFIG = {
   PRIVATE_ONLY: false,
   SESSION_DIR: './data/session',
   DATA_DIR: './data',
-  PAIRING_CUSTOM_ENABLED: false,
-  PAIRING_CODE: '',
-  PAIRING_RETRY_MS: 45000,
   AUTO_RECONNECT: true,
   RATE_LIMIT_WINDOW_MS: 10000,
   RATE_LIMIT_MAX: 15,
-  UI_MODE: 'hybrid',
-  UI_FALLBACK_MODE: 'ios-safe',
+  UI_MODE: 'text',
+  UI_FALLBACK_MODE: 'meta-safe',
   MENU_MEDIA_ENABLED: false,
   MENU_THUMBNAIL_MP4_URL: '',
   MENU_THUMBNAIL_IMAGE_URL: '',
@@ -32,7 +30,14 @@ const DEFAULT_CONFIG = {
   DLAVIE_API_BASE_URL: 'https://dlaviecomerce.vercel.app/api',
   BOT_GATE_KEY: '',
   LOG_LEVEL: 'info',
-  CONSOLE_ANIMATION_ENABLED: true
+  CONSOLE_ANIMATION_ENABLED: true,
+  META_GRAPH_VERSION: 'v20.0',
+  META_PHONE_NUMBER_ID: '',
+  META_BUSINESS_ACCOUNT_ID: '',
+  META_ACCESS_TOKEN: '',
+  META_VERIFY_TOKEN: 'dlavie_cloud_verify',
+  META_APP_SECRET: '',
+  META_PUBLIC_WEBHOOK_URL: ''
 };
 
 export function ensureDir(dir) {
@@ -57,27 +62,18 @@ function list(value) {
   return String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
 }
 
-function bool(value, fallback = false) {
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'string') return ['true', '1', 'yes', 'on'].includes(value.toLowerCase());
-  return fallback;
-}
-
 const raw = { ...DEFAULT_CONFIG, ...readJson(CONFIG_FILE, {}) };
-const customPairingEnabled = bool(raw.PAIRING_CUSTOM_ENABLED, false);
-const normalizedPairingCode = String(raw.PAIRING_CODE || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
+const provider = String(raw.WA_PROVIDER || 'meta-cloud').trim().toLowerCase();
 
 export const cfg = {
   ...raw,
+  provider,
   botName: String(raw.BOT_NAME || DEFAULT_CONFIG.BOT_NAME),
   phone: digits(raw.WA_PHONE_NUMBER),
   owner: digits(raw.OWNER_NUMBER),
   ownerJids: list(raw.OWNER_JIDS),
   port: Number(process.env.PORT || raw.PORT) || DEFAULT_CONFIG.PORT,
   privateOnly: raw.PRIVATE_ONLY === true,
-  pairingCustomEnabled: customPairingEnabled,
-  pairingCode: customPairingEnabled ? normalizedPairingCode : '',
-  pairingRetryMs: Math.max(Number(raw.PAIRING_RETRY_MS) || DEFAULT_CONFIG.PAIRING_RETRY_MS, 15000),
   autoReconnect: raw.AUTO_RECONNECT !== false,
   dataDir: path.resolve(ROOT, raw.DATA_DIR || DEFAULT_CONFIG.DATA_DIR),
   sessionDir: path.resolve(ROOT, raw.SESSION_DIR || DEFAULT_CONFIG.SESSION_DIR),
@@ -95,11 +91,18 @@ export const cfg = {
   apiBase: String(raw.DLAVIE_API_BASE_URL || '').replace(/\/$/, ''),
   gateKey: String(raw.BOT_GATE_KEY || '').trim(),
   logLevel: String(raw.LOG_LEVEL || DEFAULT_CONFIG.LOG_LEVEL),
-  consoleAnimationEnabled: raw.CONSOLE_ANIMATION_ENABLED !== false
+  consoleAnimationEnabled: raw.CONSOLE_ANIMATION_ENABLED !== false,
+  metaGraphVersion: String(raw.META_GRAPH_VERSION || DEFAULT_CONFIG.META_GRAPH_VERSION).trim(),
+  metaPhoneNumberId: String(raw.META_PHONE_NUMBER_ID || '').trim(),
+  metaBusinessAccountId: String(raw.META_BUSINESS_ACCOUNT_ID || '').trim(),
+  metaAccessToken: String(raw.META_ACCESS_TOKEN || '').trim(),
+  metaVerifyToken: String(raw.META_VERIFY_TOKEN || DEFAULT_CONFIG.META_VERIFY_TOKEN).trim(),
+  metaAppSecret: String(raw.META_APP_SECRET || '').trim(),
+  publicWebhookUrl: String(raw.META_PUBLIC_WEBHOOK_URL || '').trim()
 };
 
 ensureDir(cfg.dataDir);
-ensureDir(cfg.sessionDir);
+if (cfg.provider !== 'meta-cloud') ensureDir(cfg.sessionDir);
 
 export function jidFromPhone(phone) {
   const d = digits(phone);
@@ -116,22 +119,33 @@ export function ownerJids() {
 
 export function assertConfig() {
   if (!fs.existsSync(CONFIG_FILE)) {
-    throw new Error('config.json belum ada. Copy config.example.json menjadi config.json lalu isi WA_PHONE_NUMBER dan OWNER_NUMBER.');
+    throw new Error('config.json belum ada. Copy config.example.json menjadi config.json lalu isi konfigurasi Dlavie.');
   }
-  if (!cfg.phone || cfg.phone.includes('x') || cfg.phone.length < 10) {
-    throw new Error('WA_PHONE_NUMBER belum valid. Isi nomor lengkap, contoh: 6285725483343. Jangan hanya 628.');
+
+  if (!['meta-cloud', 'baileys'].includes(cfg.provider)) {
+    throw new Error('WA_PROVIDER tidak valid. Gunakan meta-cloud atau baileys.');
   }
+
   if (!cfg.owner || cfg.owner.includes('x') || cfg.owner.length < 10) {
     throw new Error('OWNER_NUMBER belum valid. Isi nomor lengkap, contoh: 62882007437216.');
   }
-  if (cfg.pairingCustomEnabled && cfg.pairingCode.length < 6) {
-    throw new Error('PAIRING_CUSTOM_ENABLED aktif, tetapi PAIRING_CODE kurang dari 6 karakter. Matikan PAIRING_CUSTOM_ENABLED atau isi kode valid.');
+
+  if (cfg.provider === 'meta-cloud') {
+    if (!cfg.metaPhoneNumberId) throw new Error('META_PHONE_NUMBER_ID belum diisi. Ambil dari WhatsApp > API Setup di Meta Developers.');
+    if (!cfg.metaAccessToken) throw new Error('META_ACCESS_TOKEN belum diisi. Buat token dari Meta Developers/System User.');
+    if (!cfg.metaVerifyToken) throw new Error('META_VERIFY_TOKEN belum diisi. Buat bebas, lalu samakan di Webhook Meta.');
+    return;
+  }
+
+  if (!cfg.phone || cfg.phone.includes('x') || cfg.phone.length < 10) {
+    throw new Error('WA_PHONE_NUMBER belum valid. Isi nomor lengkap, contoh: 6285725483343. Jangan hanya 628.');
   }
 }
 
 export function publicConfig() {
   return {
     botName: cfg.botName,
+    provider: cfg.provider,
     phone: cfg.phone,
     owner: cfg.owner,
     port: cfg.port,
@@ -139,6 +153,7 @@ export function publicConfig() {
     uiMode: cfg.uiMode,
     branch: cfg.branch,
     appUrl: cfg.appUrl,
-    pairingCustomEnabled: cfg.pairingCustomEnabled
+    metaPhoneNumberId: cfg.provider === 'meta-cloud' ? cfg.metaPhoneNumberId : undefined,
+    publicWebhookUrl: cfg.publicWebhookUrl || undefined
   };
 }
