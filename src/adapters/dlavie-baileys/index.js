@@ -23,35 +23,51 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
   let saveCreds = null;
   let messageHandler = async () => {};
   let reconnecting = false;
-  let pairingRequested = false;
+  let pairingInFlight = false;
+  let lastPairingAt = 0;
 
-  async function requestPairingIfNeeded() {
-    if (pairingRequested) return;
-    if (!sock?.authState?.creds?.registered && cfg.phone) {
-      pairingRequested = true;
-      await sleep(2500);
-      try {
-        const code = cfg.pairingCustomEnabled
-          ? await sock.requestPairingCode(cfg.phone, cfg.pairingCode)
-          : await sock.requestPairingCode(cfg.phone);
+  async function requestPairingCode(reason = 'manual') {
+    if (pairingInFlight) return;
+    if (sock?.authState?.creds?.registered) return;
+    if (!cfg.phone) return;
 
-        printPairingBox({
-          phone: cfg.phone,
-          custom: cfg.pairingCode || '-',
-          code,
-          customEnabled: cfg.pairingCustomEnabled
-        });
-      } catch (error) {
-        pairingRequested = false;
-        logger.warn(`pairing request failed: ${error.message}`);
-      }
+    pairingInFlight = true;
+    lastPairingAt = Date.now();
+    await sleep(1200);
+
+    try {
+      const code = cfg.pairingCustomEnabled
+        ? await sock.requestPairingCode(cfg.phone, cfg.pairingCode)
+        : await sock.requestPairingCode(cfg.phone);
+
+      printPairingBox({
+        phone: cfg.phone,
+        custom: cfg.pairingCode || '-',
+        code,
+        customEnabled: cfg.pairingCustomEnabled,
+        reason
+      });
+    } catch (error) {
+      logger.warn(`pairing request failed: ${error.message}`);
+    } finally {
+      pairingInFlight = false;
     }
+  }
+
+  async function requestFreshPairingCode(reason = 'refresh') {
+    const age = Date.now() - lastPairingAt;
+    if (age < 35000) {
+      logger.info(`pairing code still fresh age=${Math.round(age / 1000)}s`);
+      return;
+    }
+    await requestPairingCode(reason);
   }
 
   async function connect() {
     const { state, saveCreds: saver } = await useMultiFileAuthState(cfg.sessionDir);
     saveCreds = saver;
-    pairingRequested = false;
+    pairingInFlight = false;
+    lastPairingAt = 0;
     const { version, isLatest } = await fetchLatestBaileysVersion();
     logger.info(`using WA version ${version.join('.')} latest=${isLatest}`);
 
@@ -63,7 +79,10 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
       browser: ['Dlavie Agent OS', 'Chrome', '1.0.0'],
       markOnlineOnConnect: false,
       syncFullHistory: false,
-      generateHighQualityLinkPreview: false
+      generateHighQualityLinkPreview: false,
+      defaultQueryTimeoutMs: 60000,
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 25000
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -71,19 +90,20 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
     sock.ev.on('connection.update', async (update) => {
       const { connection, qr } = update;
       if (qr) {
-        logger.info('QR received but ignored. Pairing-code-only mode is active.');
-        await requestPairingIfNeeded();
+        logger.info('QR received but ignored. Requesting fresh pairing code instead.');
+        await requestFreshPairingCode('qr-cycle');
       }
 
       if (connection === 'connecting') {
         store.setConnection('connecting');
         logger.info('connection connecting');
-        await requestPairingIfNeeded();
+        await requestFreshPairingCode('connecting');
       }
 
       if (connection === 'open') {
         reconnecting = false;
-        pairingRequested = false;
+        pairingInFlight = false;
+        lastPairingAt = 0;
         const jid = sock.user?.id || sock.user?.jid || null;
         store.setConnection('open', jid);
         logger.info('connection open');
@@ -116,7 +136,7 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
       }
     });
 
-    await requestPairingIfNeeded();
+    await requestPairingCode('initial');
     return sock;
   }
 
