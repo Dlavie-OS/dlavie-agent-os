@@ -14,7 +14,8 @@ const DEFAULT_CONFIG = {
   PRIVATE_ONLY: false,
   SESSION_DIR: './data/session',
   DATA_DIR: './data',
-  PAIRING_CODE: 'DLAVIEAI',
+  PAIRING_CUSTOM_ENABLED: false,
+  PAIRING_CODE: '',
   PAIRING_RETRY_MS: 45000,
   AUTO_RECONNECT: true,
   RATE_LIMIT_WINDOW_MS: 10000,
@@ -30,7 +31,8 @@ const DEFAULT_CONFIG = {
   DLAVIE_APP_URL: 'https://dlaviecomerce.vercel.app',
   DLAVIE_API_BASE_URL: 'https://dlaviecomerce.vercel.app/api',
   BOT_GATE_KEY: '',
-  LOG_LEVEL: 'info'
+  LOG_LEVEL: 'info',
+  CONSOLE_ANIMATION_ENABLED: true
 };
 
 export function ensureDir(dir) {
@@ -55,7 +57,15 @@ function list(value) {
   return String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
 }
 
+function bool(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') return ['true', '1', 'yes', 'on'].includes(value.toLowerCase());
+  return fallback;
+}
+
 const raw = { ...DEFAULT_CONFIG, ...readJson(CONFIG_FILE, {}) };
+const customPairingEnabled = bool(raw.PAIRING_CUSTOM_ENABLED, false);
+const normalizedPairingCode = String(raw.PAIRING_CODE || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
 
 export const cfg = {
   ...raw,
@@ -65,7 +75,8 @@ export const cfg = {
   ownerJids: list(raw.OWNER_JIDS),
   port: Number(process.env.PORT || raw.PORT) || DEFAULT_CONFIG.PORT,
   privateOnly: raw.PRIVATE_ONLY === true,
-  pairingCode: String(raw.PAIRING_CODE || 'DLAVIEAI').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || 'DLAVIEAI',
+  pairingCustomEnabled: customPairingEnabled,
+  pairingCode: customPairingEnabled ? normalizedPairingCode : '',
   pairingRetryMs: Math.max(Number(raw.PAIRING_RETRY_MS) || DEFAULT_CONFIG.PAIRING_RETRY_MS, 15000),
   autoReconnect: raw.AUTO_RECONNECT !== false,
   dataDir: path.resolve(ROOT, raw.DATA_DIR || DEFAULT_CONFIG.DATA_DIR),
@@ -83,7 +94,8 @@ export const cfg = {
   appUrl: String(raw.DLAVIE_APP_URL || '').replace(/\/$/, ''),
   apiBase: String(raw.DLAVIE_API_BASE_URL || '').replace(/\/$/, ''),
   gateKey: String(raw.BOT_GATE_KEY || '').trim(),
-  logLevel: String(raw.LOG_LEVEL || DEFAULT_CONFIG.LOG_LEVEL)
+  logLevel: String(raw.LOG_LEVEL || DEFAULT_CONFIG.LOG_LEVEL),
+  consoleAnimationEnabled: raw.CONSOLE_ANIMATION_ENABLED !== false
 };
 
 ensureDir(cfg.dataDir);
@@ -106,8 +118,15 @@ export function assertConfig() {
   if (!fs.existsSync(CONFIG_FILE)) {
     throw new Error('config.json belum ada. Copy config.example.json menjadi config.json lalu isi WA_PHONE_NUMBER dan OWNER_NUMBER.');
   }
-  if (!cfg.phone || cfg.phone.includes('x')) throw new Error('WA_PHONE_NUMBER belum valid di config.json.');
-  if (!cfg.owner || cfg.owner.includes('x')) throw new Error('OWNER_NUMBER belum valid di config.json.');
+  if (!cfg.phone || cfg.phone.includes('x') || cfg.phone.length < 10) {
+    throw new Error('WA_PHONE_NUMBER belum valid. Isi nomor lengkap, contoh: 6285725483343. Jangan hanya 628.');
+  }
+  if (!cfg.owner || cfg.owner.includes('x') || cfg.owner.length < 10) {
+    throw new Error('OWNER_NUMBER belum valid. Isi nomor lengkap, contoh: 62882007437216.');
+  }
+  if (cfg.pairingCustomEnabled && cfg.pairingCode.length < 6) {
+    throw new Error('PAIRING_CUSTOM_ENABLED aktif, tetapi PAIRING_CODE kurang dari 6 karakter. Matikan PAIRING_CUSTOM_ENABLED atau isi kode valid.');
+  }
 }
 
 export function publicConfig() {
@@ -119,6 +138,7 @@ export function publicConfig() {
     privateOnly: cfg.privateOnly,
     uiMode: cfg.uiMode,
     branch: cfg.branch,
-    appUrl: cfg.appUrl
+    appUrl: cfg.appUrl,
+    pairingCustomEnabled: cfg.pairingCustomEnabled
   };
 }
