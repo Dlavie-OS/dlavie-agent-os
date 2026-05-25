@@ -8,13 +8,13 @@ import { createDeliveryGuard } from './delivery-guard.js';
 import { createRouter } from './router.js';
 import { printDlavieBanner, bootPulse } from './console-theme.js';
 import { createMetaCloudAdapter } from '../adapters/meta-cloud/index.js';
-import { createDlavieBaileysAdapter } from '../adapters/dlavie-baileys/index.js';
 
 async function createWhatsAppAdapter({ logger, store }) {
   if (cfg.provider === 'meta-cloud') {
     return createMetaCloudAdapter({ logger, store });
   }
 
+  const { createDlavieBaileysAdapter } = await import('../adapters/dlavie-baileys/index.js');
   return createDlavieBaileysAdapter({ logger, store });
 }
 
