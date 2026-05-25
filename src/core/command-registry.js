@@ -13,11 +13,18 @@ export class CommandRegistry {
     if (!plugin?.run || typeof plugin.run !== 'function') throw new Error(`Plugin ${plugin.id} must expose run(ctx, api).`);
 
     this.plugins.set(plugin.id, plugin);
+
+    // Normalize first so entries like "menu" and "/menu" become one command.
+    // This prevents same-plugin aliases from crashing the engine while still
+    // protecting against two different plugins owning the same command.
     const entries = [...(plugin.commands || []), ...(plugin.aliases || [])];
-    for (const entry of entries) {
-      const key = normalizeCommand(entry);
-      if (!key) continue;
-      if (this.commands.has(key)) throw new Error(`Duplicate command registration: ${key}`);
+    const normalizedKeys = new Set(entries.map(normalizeCommand).filter(Boolean));
+
+    for (const key of normalizedKeys) {
+      const existing = this.commands.get(key);
+      if (existing && existing.id !== plugin.id) {
+        throw new Error(`Duplicate command registration: ${key} used by ${existing.id} and ${plugin.id}`);
+      }
       this.commands.set(key, plugin);
     }
   }
