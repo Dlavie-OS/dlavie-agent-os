@@ -4,10 +4,10 @@ import makeWASocket, {
   useMultiFileAuthState
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import qrcode from 'qrcode-terminal';
 import { Boom } from '@hapi/boom';
 import { cfg } from '../../core/config.js';
 import { parseBaileysMessage } from './message-parser.js';
+import { printPairingBox } from '../../core/console-theme.js';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -23,10 +23,13 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
   let saveCreds = null;
   let messageHandler = async () => {};
   let reconnecting = false;
+  let pairingRequested = false;
 
   async function requestPairingIfNeeded() {
+    if (pairingRequested) return;
     if (!sock?.authState?.creds?.registered && cfg.phone) {
-      await sleep(1500);
+      pairingRequested = true;
+      await sleep(2500);
       try {
         let code;
         try {
@@ -36,13 +39,9 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
           code = await sock.requestPairingCode(cfg.phone);
         }
 
-        console.log('\n===== DLAVIE WA-MD PAIRING =====');
-        console.log(`PHONE : ${cfg.phone}`);
-        console.log(`CUSTOM: ${cfg.pairingCode}`);
-        console.log(`CODE  : ${code}`);
-        console.log('NOTE  : gunakan kode terbaru paling bawah');
-        console.log('================================\n');
+        printPairingBox({ phone: cfg.phone, custom: cfg.pairingCode, code });
       } catch (error) {
+        pairingRequested = false;
         logger.warn(`pairing request failed: ${error.message}`);
       }
     }
@@ -51,13 +50,14 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
   async function connect() {
     const { state, saveCreds: saver } = await useMultiFileAuthState(cfg.sessionDir);
     saveCreds = saver;
+    pairingRequested = false;
     const { version, isLatest } = await fetchLatestBaileysVersion();
     logger.info(`using WA version ${version.join('.')} latest=${isLatest}`);
 
     sock = makeWASocket({
       version,
       auth: state,
-      printQRInTerminal: true,
+      printQRInTerminal: false,
       logger: pino({ level: 'silent' }),
       browser: ['Dlavie Agent OS', 'Chrome', '1.0.0'],
       markOnlineOnConnect: false,
@@ -70,20 +70,22 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
     sock.ev.on('connection.update', async (update) => {
       const { connection, qr } = update;
       if (qr) {
-        logger.info('QR received. Scan if pairing code is not used.');
-        qrcode.generate(qr, { small: true });
+        logger.info('QR received but ignored. Pairing-code-only mode is active.');
+        await requestPairingIfNeeded();
       }
 
       if (connection === 'connecting') {
         store.setConnection('connecting');
         logger.info('connection connecting');
+        await requestPairingIfNeeded();
       }
 
       if (connection === 'open') {
         reconnecting = false;
+        pairingRequested = false;
         const jid = sock.user?.id || sock.user?.jid || null;
         store.setConnection('open', jid);
-        logger.info(`connection open`);
+        logger.info('connection open');
         logger.info(`connected as ${jid || 'unknown'}`);
       }
 
