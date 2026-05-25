@@ -1,0 +1,22 @@
+{
+  "name": "dlavie-agent-os",
+  "version": "1.0.0-phase1",
+  "private": true,
+  "type": "module",
+  "description": "Dlavie Agent OS Phase 1: modular multi-device WhatsApp engine with plugin runtime, DeliveryGuard, UI fallback, OriginMark, and health foundation.",
+  "scripts": {
+    "start": "node src/index.js",
+    "doctor": "node src/index.js --doctor",
+    "simulate": "node src/index.js --simulate menu"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.18",
+    "express": "^4.21.2",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
