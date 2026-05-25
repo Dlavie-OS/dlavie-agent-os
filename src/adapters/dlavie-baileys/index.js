@@ -31,15 +31,16 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
       pairingRequested = true;
       await sleep(2500);
       try {
-        let code;
-        try {
-          code = await sock.requestPairingCode(cfg.phone, cfg.pairingCode);
-        } catch (customError) {
-          logger.warn(`custom pairing code failed, requesting generated code: ${customError.message}`);
-          code = await sock.requestPairingCode(cfg.phone);
-        }
+        const code = cfg.pairingCustomEnabled
+          ? await sock.requestPairingCode(cfg.phone, cfg.pairingCode)
+          : await sock.requestPairingCode(cfg.phone);
 
-        printPairingBox({ phone: cfg.phone, custom: cfg.pairingCode, code });
+        printPairingBox({
+          phone: cfg.phone,
+          custom: cfg.pairingCode || '-',
+          code,
+          customEnabled: cfg.pairingCustomEnabled
+        });
       } catch (error) {
         pairingRequested = false;
         logger.warn(`pairing request failed: ${error.message}`);
