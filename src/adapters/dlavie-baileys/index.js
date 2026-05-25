@@ -16,6 +16,8 @@ const fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion || baileys.d
 const useMultiFileAuthState = baileys.useMultiFileAuthState || baileys.default?.useMultiFileAuthState;
 const makeCacheableSignalKeyStore = baileys.makeCacheableSignalKeyStore || baileys.default?.makeCacheableSignalKeyStore;
 
+const PAIRING_RECONNECT_DELAY_MS = 60000;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -54,12 +56,17 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
   let reconnecting = false;
   let pairingInFlight = false;
   let pairingPrinted = false;
+  let pairingCodeCreatedAt = 0;
 
   const waLogger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'silent' });
 
   async function requestPairingCode(reason = 'qr-event') {
     if (pairingInFlight) return;
-    if (pairingPrinted) return;
+    if (pairingPrinted) {
+      const age = Math.round((Date.now() - pairingCodeCreatedAt) / 1000);
+      logger.info(`pairing code already printed age=${age}s; waiting for user input, no new code generated`);
+      return;
+    }
     if (sock?.authState?.creds?.registered) return;
     if (!cfg.phone) return;
 
@@ -72,6 +79,7 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
         : await sock.requestPairingCode(cfg.phone);
 
       pairingPrinted = true;
+      pairingCodeCreatedAt = Date.now();
       printPairingBox({
         phone: cfg.phone,
         custom: cfg.pairingCode || '-',
@@ -80,19 +88,34 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
         reason
       });
       logger.info(`pairing code printed reason=${reason}`);
+      logger.info('Dlavie pairing lock active: engine will not generate another code immediately.');
     } catch (error) {
       pairingPrinted = false;
+      pairingCodeCreatedAt = 0;
       logger.warn(`pairing request failed: ${error.message}`);
     } finally {
       pairingInFlight = false;
     }
   }
 
+  function scheduleReconnect(delayMs, label) {
+    if (!cfg.autoReconnect || reconnecting) return;
+    reconnecting = true;
+    logger.warn(`reconnect scheduled in ${Math.round(delayMs / 1000)}s reason=${label}`);
+    setTimeout(() => {
+      reconnecting = false;
+      if (label === 'pairing-window-expired') {
+        pairingPrinted = false;
+        pairingCodeCreatedAt = 0;
+      }
+      connect().catch((error) => logger.error(`reconnect failed: ${error.message}`));
+    }, delayMs);
+  }
+
   async function connect() {
     const { state, saveCreds: saver } = await useMultiFileAuthState(cfg.sessionDir);
     saveCreds = saver;
     pairingInFlight = false;
-    pairingPrinted = false;
 
     const { version, isLatest } = await fetchLatestBaileysVersion();
     logger.info(`using WA version ${version.join('.')} latest=${isLatest}`);
@@ -124,9 +147,6 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
       if (connection === 'connecting') {
         store.setConnection('connecting');
         logger.info('connection connecting');
-        setTimeout(() => {
-          requestPairingCode('connecting-fallback').catch((error) => logger.warn(`pairing fallback failed: ${error.message}`));
-        }, 3500);
       }
 
       if (connection === 'open') {
@@ -142,21 +162,22 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
       if (connection === 'close') {
         const code = connectionCode(update);
         const reason = DisconnectReason?.[code] || 'unknown';
+        const registered = Boolean(sock?.authState?.creds?.registered);
         store.setConnection(`close:${code || 'unknown'}`);
-        logger.warn(`connection close code=${code || '-'} reason=${reason}`);
+        logger.warn(`connection close code=${code || '-'} reason=${reason} registered=${registered}`);
 
         if (code === DisconnectReason?.loggedOut || code === 401) {
           logger.warn('WhatsApp rejected/logged out this session. Delete data/session before pairing again.');
           return;
         }
 
-        if (cfg.autoReconnect && !reconnecting) {
-          reconnecting = true;
-          setTimeout(() => {
-            reconnecting = false;
-            connect().catch((error) => logger.error(`reconnect failed: ${error.message}`));
-          }, 3000);
+        if (!registered && pairingPrinted) {
+          logger.warn('pairing window closed before login. Dlavie will wait before creating a new code to avoid invalidating codes repeatedly.');
+          scheduleReconnect(PAIRING_RECONNECT_DELAY_MS, 'pairing-window-expired');
+          return;
         }
+
+        scheduleReconnect(5000, 'normal-disconnect');
       }
     });
 
@@ -170,10 +191,6 @@ export async function createDlavieBaileysAdapter({ logger, store }) {
         logger.error(`message handler failed: ${error.stack || error.message}`);
       }
     });
-
-    setTimeout(() => {
-      requestPairingCode('startup-fallback').catch((error) => logger.warn(`startup pairing failed: ${error.message}`));
-    }, 4500);
 
     return sock;
   }
