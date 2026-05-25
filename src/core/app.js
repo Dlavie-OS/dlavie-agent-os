@@ -6,10 +6,13 @@ import { createPluginManager } from './plugin-manager.js';
 import { createUiEngine } from './ui-engine.js';
 import { createDeliveryGuard } from './delivery-guard.js';
 import { createRouter } from './router.js';
+import { printDlavieBanner, bootPulse } from './console-theme.js';
 import { createDlavieBaileysAdapter } from '../adapters/dlavie-baileys/index.js';
 
 export async function createApp() {
   assertConfig();
+  printDlavieBanner(cfg);
+  await bootPulse(cfg.consoleAnimationEnabled);
 
   const logger = createLogger('dlavie');
   const store = createStore();
