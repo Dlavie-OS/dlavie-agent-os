@@ -1,0 +1,17 @@
+name = "dlavie-agent-os"
+main = "src/index.js"
+compatibility_date = "2025-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+BOT_NAME = "Dlavie Agent OS"
+META_GRAPH_VERSION = "v20.0"
+META_VERIFY_TOKEN = "dlavie_cloud_verify"
+WATERMARK_TEXT = "⚡ Powered by Dlavie Cloud"
+DLAVIE_APP_URL = "https://dlaviecomerce.vercel.app"
+
+# Secrets wajib diisi lewat Cloudflare dashboard atau wrangler secret put:
+# META_ACCESS_TOKEN
+# META_PHONE_NUMBER_ID
+# OWNER_NUMBER
+# META_APP_SECRET optional
