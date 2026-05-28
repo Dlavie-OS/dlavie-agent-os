@@ -1,4 +1,4 @@
-run = "rm -rf node_modules package-lock.json && npm init -y && npm install @whiskeysockets/baileys@6.7.18 @hapi/boom pino && node dlavie-runner"
+run = "npm start"
 modules = ["nodejs-20", "python-3.11"]
 
 [nix]
@@ -10,22 +10,22 @@ runButton = "Project"
 [[workflows.workflow]]
 name = "Project"
 mode = "parallel"
-author = "agent"
+author = "dlavie"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Start application"
+args = "Start Dlavie Guarded Engine"
 
 [[workflows.workflow]]
-name = "Start application"
-author = "agent"
+name = "Start Dlavie Guarded Engine"
+author = "dlavie"
 
 [workflows.workflow.metadata]
 outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node dlavie-runner"
+args = "npm start"
 waitForPort = 9000
 
 [[ports]]
@@ -44,3 +44,4 @@ expertMode = true
 [userenv.shared]
 DLAVIE_PHONE_NUMBER = "6285725483343"
 DLAVIE_OWNER_NUMBERS = "62882007437216"
+DLAVIE_GUARD_ENABLED = "true"
