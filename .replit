@@ -1,1 +1,33 @@
 run = "rm -rf node_modules package-lock.json && npm init -y && npm install @whiskeysockets/baileys@6.7.18 @hapi/boom pino && node dlavie-runner"
+modules = ["nodejs-20"]
+
+[nix]
+channel = "stable-25_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node dlavie-runner"
+waitForPort = 3000
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[ports]]
+localPort = 3000
+externalPort = 80
