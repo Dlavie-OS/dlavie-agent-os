@@ -1,5 +1,5 @@
 run = "rm -rf node_modules package-lock.json && npm init -y && npm install @whiskeysockets/baileys@6.7.18 @hapi/boom pino && node dlavie-runner"
-modules = ["nodejs-20"]
+modules = ["nodejs-20", "python-3.11"]
 
 [nix]
 channel = "stable-25_05"
@@ -31,3 +31,12 @@ outputType = "console"
 [[ports]]
 localPort = 3000
 externalPort = 80
+
+[agent]
+expertMode = true
+
+[userenv]
+
+[userenv.shared]
+DLAVIE_PHONE_NUMBER = "6285725483343"
+DLAVIE_OWNER_NUMBERS = "62882007437216"

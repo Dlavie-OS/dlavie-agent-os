@@ -23,6 +23,14 @@ function dlavieStartPreviewServer() {
     res.end('Dlavie Engine WA is running. Check Console for pairing code.\n')
   })
 
+  dlavieServer.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`Port ${dlavieConfig.port} sudah dipakai, skip preview server`)
+    } else {
+      console.error('Preview server error:', err.message)
+    }
+  })
+
   dlavieServer.listen(dlavieConfig.port, '0.0.0.0', () => {
     console.log(`Dlavie preview server ready on port ${dlavieConfig.port}`)
   })
@@ -78,9 +86,24 @@ async function dlavieMain() {
 
   if (dlavieConfig.usePairingCode && !state.creds.registered) {
     if (!dlavieConfig.phoneNumber) throw new Error('DLAVIE_PHONE_NUMBER wajib diisi')
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-    const dlavieCode = await dlavieSock.requestPairingCode(dlavieConfig.phoneNumber)
-    console.log('Dlavie pairing code:', dlavieCode)
+    let pairingDone = false
+    let attempts = 0
+    while (!pairingDone && attempts < 5) {
+      attempts++
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 8000))
+        const dlavieCode = await dlavieSock.requestPairingCode(dlavieConfig.phoneNumber)
+        console.log('Dlavie pairing code:', dlavieCode)
+        pairingDone = true
+      } catch (e) {
+        console.error(`Pairing attempt ${attempts} failed:`, e.message)
+        if (attempts >= 5) {
+          console.error('Semua percobaan pairing gagal. Coba hapus folder session dan jalankan ulang.')
+          throw e
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10000))
+      }
+    }
   }
 
   dlavieSock.ev.on('messages.upsert', async ({ messages }) => {
