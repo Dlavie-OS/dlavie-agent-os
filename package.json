@@ -1,13 +1,23 @@
 {
-  "name": "workspace",
+  "name": "dlavie-agent-os",
   "version": "1.0.0",
-  "description": "",
-  "main": "dlavie.config.js",
+  "description": "Dlavie OS WhatsApp Engine with Dlavie Guard System",
+  "main": "dlavie-runner-guarded",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node dlavie-runner-guarded",
+    "start:guarded": "node dlavie-runner-guarded",
+    "start:legacy": "node dlavie-runner",
+    "dlavie:guard": "node dlavie-runner-guarded",
+    "dlavie:legacy": "node dlavie-runner"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "dlavie",
+    "dlavie-engine",
+    "whatsapp-bot",
+    "baileys",
+    "guard"
+  ],
+  "author": "Dlavie OS",
   "license": "ISC",
   "dependencies": {
     "@hapi/boom": "^10.0.1",
