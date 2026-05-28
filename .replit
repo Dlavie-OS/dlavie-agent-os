@@ -26,11 +26,11 @@ outputType = "console"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm start"
-waitForPort = 3000
+waitForPort = 9000
 
 [[ports]]
-localPort = 3000
-externalPort = 80
+localPort = 9000
+externalPort = 9000
 
 [agent]
 expertMode = true
@@ -38,7 +38,7 @@ expertMode = true
 [userenv]
 
 [userenv.shared]
-PORT = "3000"
+PORT = "9000"
 DLAVIE_SESSION_PATH = "dlavie.session.guard"
 DLAVIE_PHONE_NUMBER = "6285725483343"
 DLAVIE_OWNER_NUMBERS = "62882007437216"
