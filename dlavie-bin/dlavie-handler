@@ -1,0 +1,33 @@
+export function dlavieReadText(dlavieMessage) {
+  const dlaviePayload = dlavieMessage.message || {}
+  return (
+    dlaviePayload.conversation ||
+    dlaviePayload.extendedTextMessage?.text ||
+    dlaviePayload.imageMessage?.caption ||
+    dlaviePayload.videoMessage?.caption ||
+    ''
+  ).trim()
+}
+
+export async function dlavieHandleMessage({ dlavieSock, dlavieMessage, dlavieConfig }) {
+  const dlavieText = dlavieReadText(dlavieMessage)
+  const dlavieRemoteJid = dlavieMessage.key.remoteJid
+  if (!dlavieText.startsWith(dlavieConfig.dlaviePrefix)) return
+
+  const [dlavieRawCommand, ...dlavieArgs] = dlavieText.slice(dlavieConfig.dlaviePrefix.length).trim().split(/\s+/)
+  const dlavieCommand = String(dlavieRawCommand || '').toLowerCase()
+
+  if (dlavieCommand === 'ping') {
+    await dlavieSock.sendMessage(dlavieRemoteJid, { text: 'pong dari Dlavie Engine' }, { quoted: dlavieMessage })
+    return
+  }
+
+  if (dlavieCommand === 'menu') {
+    await dlavieSock.sendMessage(dlavieRemoteJid, { text: 'Dlavie OS Menu\n.ping\n.menu\n.owner' }, { quoted: dlavieMessage })
+    return
+  }
+
+  if (dlavieCommand === 'owner') {
+    await dlavieSock.sendMessage(dlavieRemoteJid, { text: `Owner Dlavie: ${dlavieConfig.dlavieOwnerNumbers.join(', ')}` }, { quoted: dlavieMessage })
+  }
+}

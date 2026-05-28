@@ -1,0 +1,27 @@
+import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys'
+import { Boom } from '@hapi/boom'
+import pino from 'pino'
+
+export async function dlavieStartEngine(dlavieConfig) {
+  const { state, saveCreds } = await useMultiFileAuthState(dlavieConfig.dlavieSessionPath)
+  const dlavieSock = makeWASocket({
+    auth: state,
+    logger: pino({ level: 'silent' }),
+    browser: ['Dlavie OS', 'Chrome', '1.0.0']
+  })
+
+  dlavieSock.ev.on('creds.update', saveCreds)
+
+  if (dlavieConfig.dlavieUsePairingCode && !state.creds.registered) {
+    const dlavieCode = await dlavieSock.requestPairingCode(dlavieConfig.dlaviePhoneNumber)
+    console.log('Dlavie pairing code:', dlavieCode)
+  }
+
+  dlavieSock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+    if (connection === 'open') console.log('Dlavie Engine connected')
+    if (connection === 'close') {
+      const dlavieStatusCode = new Boom(lastDisconnect?.error)?.output?.statusCode
+      if (dlavieStatusCode !== DisconnectReason.loggedOut) dlavieStartEngine(dlavieConfig)
+    }
+  })
+}

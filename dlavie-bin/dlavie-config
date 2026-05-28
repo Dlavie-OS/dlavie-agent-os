@@ -1,0 +1,12 @@
+export function dlavieConfig() {
+  return {
+    dlavieBotName: process.env.DLAVIE_BOT_NAME || 'Dlavie OS',
+    dlaviePrefix: process.env.DLAVIE_PREFIX || '.',
+    dlaviePhoneNumber: process.env.DLAVIE_PHONE_NUMBER || '',
+    dlavieUsePairingCode: String(process.env.DLAVIE_USE_PAIRING_CODE || 'true') === 'true',
+    dlavieOwnerNumbers: String(process.env.DLAVIE_OWNER_NUMBERS || '').split(',').map((dlavie) => dlavie.trim()).filter(Boolean),
+    dlavieMode: process.env.DLAVIE_MODE || 'public',
+    dlavieSessionPath: process.env.DLAVIE_SESSION_PATH || './dlavie.session',
+    dlavieCooldownMs: Number(process.env.DLAVIE_COOLDOWN_MS || 1500)
+  }
+}

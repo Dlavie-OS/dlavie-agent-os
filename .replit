@@ -1,0 +1,1 @@
+run = "rm -rf node_modules package-lock.json && npm init -y && npm install @whiskeysockets/baileys@6.7.18 @hapi/boom pino && node dlavie-runner"

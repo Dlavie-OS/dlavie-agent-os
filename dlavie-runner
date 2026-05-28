@@ -1,0 +1,129 @@
+const dlavieProcess = require('node:process')
+const dlaviePath = require('node:path')
+const dlavieFs = require('node:fs')
+const dlavieHttp = require('node:http')
+
+function dlavieEnv(name, fallback = '') {
+  return dlavieProcess.env[name] || fallback
+}
+
+const dlavieConfig = {
+  botName: dlavieEnv('DLAVIE_BOT_NAME', 'Dlavie OS'),
+  prefix: dlavieEnv('DLAVIE_PREFIX', '.'),
+  phoneNumber: dlavieEnv('DLAVIE_PHONE_NUMBER', ''),
+  usePairingCode: dlavieEnv('DLAVIE_USE_PAIRING_CODE', 'true') === 'true',
+  ownerNumbers: dlavieEnv('DLAVIE_OWNER_NUMBERS', '').split(',').map((x) => x.trim()).filter(Boolean),
+  sessionPath: dlavieEnv('DLAVIE_SESSION_PATH', dlaviePath.join(dlavieProcess.cwd(), 'dlavie.session')),
+  port: Number(dlavieEnv('PORT', '3000'))
+}
+
+function dlavieStartPreviewServer() {
+  const dlavieServer = dlavieHttp.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('Dlavie Engine WA is running. Check Console for pairing code.\n')
+  })
+
+  dlavieServer.listen(dlavieConfig.port, '0.0.0.0', () => {
+    console.log(`Dlavie preview server ready on port ${dlavieConfig.port}`)
+  })
+}
+
+function dlaviePick(module, ...names) {
+  for (const name of names) {
+    if (module?.[name]) return module[name]
+    if (module?.default?.[name]) return module.default[name]
+  }
+  return undefined
+}
+
+async function dlavieSendPlainText(dlavieSock, dlavieRemoteJid, dlavieText) {
+  return dlavieSock.sendMessage(dlavieRemoteJid, { text: dlavieText })
+}
+
+async function dlavieMain() {
+  dlavieStartPreviewServer()
+
+  let dlavieBaileys
+  let dlavieBoom
+  let dlaviePino
+
+  try {
+    dlavieBaileys = await import('@whiskeysockets/baileys')
+    dlavieBoom = await import('@hapi/boom')
+    dlaviePino = await import('pino')
+  } catch (dlavieError) {
+    console.error('Dlavie dependency belum terpasang. Jalankan: npm install @whiskeysockets/baileys @hapi/boom pino')
+    throw dlavieError
+  }
+
+  const makeWASocket = dlavieBaileys.default?.default || dlavieBaileys.default || dlavieBaileys.makeWASocket
+  const DisconnectReason = dlaviePick(dlavieBaileys, 'DisconnectReason')
+  const useMultiFileAuthState = dlaviePick(dlavieBaileys, 'useMultiFileAuthState')
+  const Boom = dlavieBoom.Boom || dlavieBoom.default?.Boom || dlavieBoom.default
+  const pino = dlaviePino.default || dlaviePino
+
+  if (typeof makeWASocket !== 'function') throw new Error('Dlavie Baileys makeWASocket tidak ditemukan')
+  if (typeof useMultiFileAuthState !== 'function') throw new Error('Dlavie Baileys auth state tidak ditemukan')
+
+  if (!dlavieFs.existsSync(dlavieConfig.sessionPath)) dlavieFs.mkdirSync(dlavieConfig.sessionPath, { recursive: true })
+  const { state, saveCreds } = await useMultiFileAuthState(dlavieConfig.sessionPath)
+
+  const dlavieSock = makeWASocket({
+    auth: state,
+    logger: pino({ level: 'silent' }),
+    browser: ['Dlavie OS', 'Chrome', '1.0.0']
+  })
+
+  dlavieSock.ev.on('creds.update', saveCreds)
+
+  if (dlavieConfig.usePairingCode && !state.creds.registered) {
+    if (!dlavieConfig.phoneNumber) throw new Error('DLAVIE_PHONE_NUMBER wajib diisi')
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    const dlavieCode = await dlavieSock.requestPairingCode(dlavieConfig.phoneNumber)
+    console.log('Dlavie pairing code:', dlavieCode)
+  }
+
+  dlavieSock.ev.on('messages.upsert', async ({ messages }) => {
+    const dlavieMessage = messages?.[0]
+    if (!dlavieMessage?.message || dlavieMessage.key.fromMe) return
+
+    const dlavieText = dlavieMessage.message.conversation || dlavieMessage.message.extendedTextMessage?.text || ''
+    const dlavieRemoteJid = dlavieMessage.key.remoteJid
+    if (!dlavieText.startsWith(dlavieConfig.prefix)) return
+
+    const [dlavieCommand] = dlavieText.slice(dlavieConfig.prefix.length).trim().split(/\s+/)
+    const dlavieCmd = String(dlavieCommand || '').toLowerCase()
+
+    if (dlavieCmd === 'test') {
+      await dlavieSendPlainText(dlavieSock, dlavieRemoteJid, 'Bot aktif')
+      return
+    }
+
+    if (dlavieCmd === 'ping') {
+      await dlavieSendPlainText(dlavieSock, dlavieRemoteJid, 'pong dari Dlavie Engine')
+      return
+    }
+
+    if (dlavieCmd === 'menu') {
+      await dlavieSendPlainText(dlavieSock, dlavieRemoteJid, 'Dlavie OS Menu\n.test\n.ping\n.menu\n.owner')
+      return
+    }
+
+    if (dlavieCmd === 'owner') {
+      await dlavieSendPlainText(dlavieSock, dlavieRemoteJid, `Owner Dlavie: ${dlavieConfig.ownerNumbers.join(', ') || '-'}`)
+    }
+  })
+
+  dlavieSock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+    if (connection === 'open') console.log('Dlavie Engine connected')
+    if (connection === 'close') {
+      const dlavieStatus = new Boom(lastDisconnect?.error)?.output?.statusCode
+      if (dlavieStatus !== DisconnectReason?.loggedOut) setTimeout(dlavieMain, 3000)
+    }
+  })
+}
+
+dlavieMain().catch((dlavieError) => {
+  console.error('Dlavie Engine fatal:', dlavieError)
+  process.exit(1)
+})

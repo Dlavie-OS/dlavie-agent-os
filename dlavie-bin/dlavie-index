@@ -1,0 +1,8 @@
+import dotenv from 'dotenv'
+import { dlavieConfig } from '../dlavie.config.js'
+
+dotenv.config({ path: '.env.dlavie' })
+dotenv.config()
+
+const dlavie = dlavieConfig()
+console.log('Dlavie Engine starting', dlavie.dlavieBotName)
