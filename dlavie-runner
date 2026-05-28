@@ -54,6 +54,7 @@ async function dlavieMain() {
   let dlavieBaileys
   let dlavieBoom
   let dlaviePino
+  let dlavieQr
 
   try {
     dlavieBaileys = await import('@whiskeysockets/baileys')
@@ -79,32 +80,82 @@ async function dlavieMain() {
   const dlavieSock = makeWASocket({
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['Dlavie OS', 'Chrome', '1.0.0']
+    browser: ['Chrome (Mac OS)', 'Desktop', '10.0.0'],
+    keepAliveIntervalMs: 30000,
+    connectTimeoutMs: 30000,
+    defaultQueryTimeoutMs: 30000,
+    markOnlineOnConnect: false
   })
 
   dlavieSock.ev.on('creds.update', saveCreds)
 
-  if (dlavieConfig.usePairingCode && !state.creds.registered) {
-    if (!dlavieConfig.phoneNumber) throw new Error('DLAVIE_PHONE_NUMBER wajib diisi')
-    let pairingDone = false
-    let attempts = 0
-    while (!pairingDone && attempts < 5) {
-      attempts++
+  let pairingRequested = false
+  let qrPrinted = false
+
+  dlavieSock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    if (connection === 'open') {
+      console.log('==============================')
+      console.log('Dlavie Engine CONNECTED')
+      console.log('==============================')
+      return
+    }
+
+    if (qr && !qrPrinted) {
+      qrPrinted = true
+      console.log('==============================')
+      console.log('QR CODE TERSEDIA')
+      console.log('==============================')
       try {
-        await new Promise((resolve) => setTimeout(resolve, 8000))
-        const dlavieCode = await dlavieSock.requestPairingCode(dlavieConfig.phoneNumber)
-        console.log('Dlavie pairing code:', dlavieCode)
-        pairingDone = true
-      } catch (e) {
-        console.error(`Pairing attempt ${attempts} failed:`, e.message)
-        if (attempts >= 5) {
-          console.error('Semua percobaan pairing gagal. Coba hapus folder session dan jalankan ulang.')
-          throw e
+        const QRCode = await import('qrcode')
+        const generateQR = QRCode.default || QRCode
+        if (typeof generateQR.toString === 'function') {
+          const ascii = await generateQR.toString(qr, { type: 'terminal', small: true })
+          console.log('\n' + ascii + '\n')
         }
-        await new Promise((resolve) => setTimeout(resolve, 10000))
+      } catch (qrErr) {
+        console.log('QR string:', qr)
+      }
+      console.log('Scan QR di WhatsApp HP: Pengaturan > Perangkat Tertaut > Tautkan Perangkat')
+      console.log('Atau tautkan dengan nomor:', dlavieConfig.phoneNumber)
+    }
+
+    if (connection === 'connecting' && !pairingRequested && !state.creds.registered && dlavieConfig.usePairingCode) {
+      if (!dlavieConfig.phoneNumber) {
+        console.warn('DLAVIE_PHONE_NUMBER belum diisi. Gunakan QR scan saja.')
+        return
+      }
+      pairingRequested = true
+      console.log('Mencoba pairing code untuk nomor:', dlavieConfig.phoneNumber)
+      await new Promise((resolve) => setTimeout(resolve, 15000))
+      let attempts = 0
+      while (attempts < 2) {
+        attempts++
+        try {
+          const dlavieCode = await dlavieSock.requestPairingCode(dlavieConfig.phoneNumber)
+          console.log('==============================')
+          console.log('Dlavie Pairing Code:', dlavieCode)
+          console.log('==============================')
+          break
+        } catch (e) {
+          console.error(`Pairing attempt ${attempts} failed:`, e.message)
+          if (attempts >= 2) {
+            console.error('Pairing code gagal. Gunakan QR scan yang sudah muncul di atas.')
+          }
+          await new Promise((resolve) => setTimeout(resolve, 15000))
+        }
       }
     }
-  }
+
+    if (connection === 'close') {
+      const dlavieStatus = new Boom(lastDisconnect?.error)?.output?.statusCode
+      if (dlavieStatus !== DisconnectReason?.loggedOut) {
+        console.log('Koneksi tertutup, reconnect dalam 5 detik...')
+        setTimeout(dlavieMain, 5000)
+      } else {
+        console.log('Session logout. Hapus folder session dan restart.')
+      }
+    }
+  })
 
   dlavieSock.ev.on('messages.upsert', async ({ messages }) => {
     const dlavieMessage = messages?.[0]
@@ -134,14 +185,6 @@ async function dlavieMain() {
 
     if (dlavieCmd === 'owner') {
       await dlavieSendPlainText(dlavieSock, dlavieRemoteJid, `Owner Dlavie: ${dlavieConfig.ownerNumbers.join(', ') || '-'}`)
-    }
-  })
-
-  dlavieSock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
-    if (connection === 'open') console.log('Dlavie Engine connected')
-    if (connection === 'close') {
-      const dlavieStatus = new Boom(lastDisconnect?.error)?.output?.statusCode
-      if (dlavieStatus !== DisconnectReason?.loggedOut) setTimeout(dlavieMain, 3000)
     }
   })
 }
