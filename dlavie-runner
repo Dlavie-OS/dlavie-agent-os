@@ -14,15 +14,45 @@ const dlavieConfig = {
   usePairingCode: dlavieEnv('DLAVIE_USE_PAIRING_CODE', 'true') === 'true',
   ownerNumbers: dlavieEnv('DLAVIE_OWNER_NUMBERS', '').split(',').map((x) => x.trim()).filter(Boolean),
   sessionPath: dlavieEnv('DLAVIE_SESSION_PATH', dlaviePath.join(dlavieProcess.cwd(), 'dlavie.session')),
-  port: Number(dlavieEnv('PORT', '9000'))
+  port: Number(dlavieEnv('PORT', '9000')),
+  storePath: dlaviePath.join(dlavieProcess.cwd(), 'dlavie.store.json')
+}
+
+const dlavieStore = {
+  banned: new Set(),
+  antidelete: new Set(),
+  messages: new Map(),
+  startTime: Date.now()
+}
+
+function dlavieLoadStore() {
+  try {
+    if (dlavieFs.existsSync(dlavieConfig.storePath)) {
+      const data = JSON.parse(dlavieFs.readFileSync(dlavieConfig.storePath, 'utf8'))
+      if (data.banned) data.banned.forEach((x) => dlavieStore.banned.add(x))
+      if (data.antidelete) data.antidelete.forEach((x) => dlavieStore.antidelete.add(x))
+    }
+  } catch (e) {
+    console.error('Load store error:', e.message)
+  }
+}
+
+function dlavieSaveStore() {
+  try {
+    dlavieFs.writeFileSync(dlavieConfig.storePath, JSON.stringify({
+      banned: Array.from(dlavieStore.banned),
+      antidelete: Array.from(dlavieStore.antidelete)
+    }, null, 2))
+  } catch (e) {
+    console.error('Save store error:', e.message)
+  }
 }
 
 function dlavieStartPreviewServer() {
   const dlavieServer = dlavieHttp.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('Dlavie Engine WA is running. Check Console for pairing code.\n')
+    res.end('Dlavie Engine WA is running. Check Console for QR code.\n')
   })
-
   dlavieServer.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.log(`Port ${dlavieConfig.port} sudah dipakai, skip preview server`)
@@ -30,7 +60,6 @@ function dlavieStartPreviewServer() {
       console.error('Preview server error:', err.message)
     }
   })
-
   dlavieServer.listen(dlavieConfig.port, '0.0.0.0', () => {
     console.log(`Dlavie preview server ready on port ${dlavieConfig.port}`)
   })
@@ -44,17 +73,65 @@ function dlaviePick(module, ...names) {
   return undefined
 }
 
-async function dlavieSendPlainText(dlavieSock, dlavieRemoteJid, dlavieText) {
-  return dlavieSock.sendMessage(dlavieRemoteJid, { text: dlavieText })
+async function dlavieTyping(sock, jid, durationMs = 2000) {
+  try {
+    await sock.presenceSubscribe(jid)
+    await sock.sendPresenceUpdate('composing', jid)
+    await new Promise((r) => setTimeout(r, durationMs))
+    await sock.sendPresenceUpdate('available', jid)
+  } catch (e) {
+    // silent
+  }
+}
+
+async function dlavieReadMessage(sock, key) {
+  try {
+    await sock.readMessages([key])
+  } catch (e) {
+    // silent
+  }
+}
+
+async function dlavieSendText(sock, jid, text, opts = {}) {
+  return sock.sendMessage(jid, { text, ...opts })
+}
+
+function dlavieFormatRuntime(ms) {
+  const s = Math.floor(ms / 1000)
+  const m = Math.floor(s / 60)
+  const h = Math.floor(m / 60)
+  const d = Math.floor(h / 24)
+  return `${d}h ${h % 24}j ${m % 60}m ${s % 60}d`
+}
+
+function dlavieIsOwner(jid) {
+  const num = jid.split('@')[0]?.replace(/[^0-9]/g, '')
+  return dlavieConfig.ownerNumbers.some((o) => num?.includes(o))
+}
+
+function dlavieIsBanned(jid) {
+  const num = jid.split('@')[0]?.replace(/[^0-9]/g, '')
+  return dlavieStore.banned.has(num)
+}
+
+function dlavieStoreMessage(msg) {
+  try {
+    const key = `${msg.key.remoteJid}:${msg.key.id}`
+    dlavieStore.messages.set(key, msg)
+    if (dlavieStore.messages.size > 1000) {
+      const firstKey = dlavieStore.messages.keys().next().value
+      dlavieStore.messages.delete(firstKey)
+    }
+  } catch (e) {
+    // silent
+  }
 }
 
 async function dlavieMain() {
+  dlavieLoadStore()
   dlavieStartPreviewServer()
 
-  let dlavieBaileys
-  let dlavieBoom
-  let dlaviePino
-  let dlavieQr
+  let dlavieBaileys, dlavieBoom, dlaviePino
 
   try {
     dlavieBaileys = await import('@whiskeysockets/baileys')
@@ -68,6 +145,7 @@ async function dlavieMain() {
   const makeWASocket = dlavieBaileys.default?.default || dlavieBaileys.default || dlavieBaileys.makeWASocket
   const DisconnectReason = dlaviePick(dlavieBaileys, 'DisconnectReason')
   const useMultiFileAuthState = dlaviePick(dlavieBaileys, 'useMultiFileAuthState')
+  const downloadMediaMessage = dlaviePick(dlavieBaileys, 'downloadMediaMessage')
   const Boom = dlavieBoom.Boom || dlavieBoom.default?.Boom || dlavieBoom.default
   const pino = dlaviePino.default || dlaviePino
 
@@ -121,10 +199,7 @@ async function dlavieMain() {
     }
 
     if (connection === 'connecting' && !pairingRequested && !state.creds.registered && dlavieConfig.usePairingCode) {
-      if (!dlavieConfig.phoneNumber) {
-        console.warn('DLAVIE_PHONE_NUMBER belum diisi. Gunakan QR scan saja.')
-        return
-      }
+      if (!dlavieConfig.phoneNumber) return
       pairingRequested = true
       console.log('Mencoba pairing code untuk nomor:', dlavieConfig.phoneNumber)
       await new Promise((resolve) => setTimeout(resolve, 15000))
@@ -139,9 +214,7 @@ async function dlavieMain() {
           break
         } catch (e) {
           console.error(`Pairing attempt ${attempts} failed:`, e.message)
-          if (attempts >= 2) {
-            console.error('Pairing code gagal. Gunakan QR scan yang sudah muncul di atas.')
-          }
+          if (attempts >= 2) console.error('Pairing code gagal. Gunakan QR scan.')
           await new Promise((resolve) => setTimeout(resolve, 15000))
         }
       }
@@ -158,34 +231,300 @@ async function dlavieMain() {
     }
   })
 
-  dlavieSock.ev.on('messages.upsert', async ({ messages }) => {
+  dlavieSock.ev.on('messages.upsert', async ({ messages, type }) => {
     const dlavieMessage = messages?.[0]
     if (!dlavieMessage?.message || dlavieMessage.key.fromMe) return
 
     const dlavieText = dlavieMessage.message.conversation || dlavieMessage.message.extendedTextMessage?.text || ''
     const dlavieRemoteJid = dlavieMessage.key.remoteJid
+    const dlavieSender = dlavieMessage.key.participant || dlavieMessage.key.remoteJid
+    const isGroup = dlavieRemoteJid.endsWith('@g.us')
+
+    // Save message for anti-delete
+    if (type === 'notify' && dlavieStore.antidelete.has(dlavieRemoteJid)) {
+      dlavieStoreMessage(dlavieMessage)
+    }
+
     if (!dlavieText.startsWith(dlavieConfig.prefix)) return
 
-    const [dlavieCommand] = dlavieText.slice(dlavieConfig.prefix.length).trim().split(/\s+/)
-    const dlavieCmd = String(dlavieCommand || '').toLowerCase()
+    const args = dlavieText.slice(dlavieConfig.prefix.length).trim().split(/\s+/)
+    const dlavieCmd = String(args[0] || '').toLowerCase()
+    const dlavieArgs = args.slice(1)
+    const dlavieQuoted = dlavieMessage.message.extendedTextMessage?.contextInfo?.quotedMessage
+
+    // Mark read + typing before reply
+    await dlavieReadMessage(dlavieSock, dlavieMessage.key)
+    await dlavieTyping(dlavieSock, dlavieRemoteJid, 1500)
+
+    // --- PUBLIC COMMANDS ---
+
+    if (dlavieCmd === 'menu') {
+      const menu = `
+${dlavieConfig.botName} Menu
+
+PUBLIC
+.test  - Test bot
+.ping  - Latency bot
+.menu  - Menu ini
+.info  - Info bot
+.status - Status bot
+.runtime - Uptime bot
+.speed - Speed test
+.calc  - Kalkulator
+.read  - Mark chat read
+.typing - Demo typing
+
+GROUP
+.tagall  - Tag semua member
+.hidetag - Tag tanpa mention
+
+ANTI-DELETE
+.antidelete - Toggle anti-delete
+.getdeleted - Ambil pesan dihapus
+
+OWNER
+.owner    - Info owner
+.ban      - Ban user
+.unban    - Unban user
+.listban  - Daftar banned
+.restart  - Restart bot
+.broadcast - Broadcast pesan
+      `.trim()
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, menu)
+      return
+    }
 
     if (dlavieCmd === 'test') {
-      await dlavieSendPlainText(dlavieSock, dlavieRemoteJid, 'Bot aktif')
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Bot aktif dan berjalan!')
       return
     }
 
     if (dlavieCmd === 'ping') {
-      await dlavieSendPlainText(dlavieSock, dlavieRemoteJid, 'pong dari Dlavie Engine')
+      const t0 = Date.now()
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Pong!')
+      const lat = Date.now() - t0
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, `Latency: ${lat}ms`)
       return
     }
 
-    if (dlavieCmd === 'menu') {
-      await dlavieSendPlainText(dlavieSock, dlavieRemoteJid, 'Dlavie OS Menu\n.test\n.ping\n.menu\n.owner')
+    if (dlavieCmd === 'info' || dlavieCmd === 'status') {
+      const info = `
+${dlavieConfig.botName}
+
+Bot Name : ${dlavieConfig.botName}
+Prefix   : ${dlavieConfig.prefix}
+Owner    : ${dlavieConfig.ownerNumbers.join(', ') || '-'}
+Platform : Node.js ${process.version}
+Session  : ${dlavieConfig.sessionPath}
+      `.trim()
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, info)
+      return
+    }
+
+    if (dlavieCmd === 'runtime') {
+      const runtime = dlavieFormatRuntime(Date.now() - dlavieStore.startTime)
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, `Runtime: ${runtime}`)
+      return
+    }
+
+    if (dlavieCmd === 'speed') {
+      const t0 = Date.now()
+      const m = await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Testing speed...')
+      const lat = Date.now() - t0
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, `Response time: ${lat}ms`)
+      return
+    }
+
+    if (dlavieCmd === 'calc' || dlavieCmd === 'hitung') {
+      const expr = dlavieArgs.join(' ')
+      if (!expr) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Gunakan: .calc 1+1')
+        return
+      }
+      try {
+        const result = Function(`"use strict"; return (${expr})`)()
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, `${expr} = ${result}`)
+      } catch (e) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Error: ekspresi tidak valid')
+      }
+      return
+    }
+
+    if (dlavieCmd === 'read') {
+      try {
+        await dlavieReadMessage(dlavieSock, dlavieMessage.key)
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Chat ditandai sudah dibaca (read)')
+      } catch (e) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Gagal mark as read')
+      }
+      return
+    }
+
+    if (dlavieCmd === 'typing') {
+      await dlavieTyping(dlavieSock, dlavieRemoteJid, 3000)
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Bot sedang mengetik... ini cuma simulasi typing presence.')
       return
     }
 
     if (dlavieCmd === 'owner') {
-      await dlavieSendPlainText(dlavieSock, dlavieRemoteJid, `Owner Dlavie: ${dlavieConfig.ownerNumbers.join(', ') || '-'}`)
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, `Owner: ${dlavieConfig.ownerNumbers.join(', ') || 'Belum diatur'}`)
+      return
+    }
+
+    // --- GROUP COMMANDS ---
+
+    if (dlavieCmd === 'tagall') {
+      if (!isGroup) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Command ini hanya untuk grup.')
+        return
+      }
+      try {
+        const groupMeta = await dlavieSock.groupMetadata(dlavieRemoteJid)
+        const mentions = groupMeta.participants.map((p) => p.id)
+        const text = mentions.map((m) => `@${m.split('@')[0]}`).join('\n')
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, text, { mentions })
+      } catch (e) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Gagal tagall: ' + e.message)
+      }
+      return
+    }
+
+    if (dlavieCmd === 'hidetag') {
+      if (!isGroup) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Command ini hanya untuk grup.')
+        return
+      }
+      try {
+        const groupMeta = await dlavieSock.groupMetadata(dlavieRemoteJid)
+        const mentions = groupMeta.participants.map((p) => p.id)
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, dlavieArgs.join(' ') || 'Hidden tag', { mentions })
+      } catch (e) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Gagal hidetag: ' + e.message)
+      }
+      return
+    }
+
+    // --- ANTI-DELETE ---
+
+    if (dlavieCmd === 'antidelete') {
+      if (dlavieStore.antidelete.has(dlavieRemoteJid)) {
+        dlavieStore.antidelete.delete(dlavieRemoteJid)
+        dlavieSaveStore()
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Anti-delete: OFF')
+      } else {
+        dlavieStore.antidelete.add(dlavieRemoteJid)
+        dlavieSaveStore()
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Anti-delete: ON\nBot akan menyimpan pesan di chat ini, dan bisa mengirim ulang jika dihapus.')
+      }
+      return
+    }
+
+    if (dlavieCmd === 'getdeleted') {
+      if (!dlavieQuoted) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Reply pesan yang dihapus dengan .getdeleted')
+        return
+      }
+      const quotedKey = dlavieMessage.message.extendedTextMessage?.contextInfo?.stanzaId
+      const quotedJid = dlavieMessage.message.extendedTextMessage?.contextInfo?.participant || dlavieRemoteJid
+      const key = `${dlavieRemoteJid}:${quotedKey}`
+      const deletedMsg = dlavieStore.messages.get(key)
+      if (deletedMsg) {
+        const text = deletedMsg.message.conversation || deletedMsg.message.extendedTextMessage?.text || '[pesan non-teks]'
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, `Pesan yang dihapus:\n${text}`)
+      } else {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Pesan tidak ditemukan di cache. Pastikan anti-delete sudah aktif sebelum pesan dihapus.')
+      }
+      return
+    }
+
+    // --- OWNER COMMANDS ---
+
+    if (!dlavieIsOwner(dlavieRemoteJid || dlavieSender)) {
+      if (['ban', 'unban', 'listban', 'restart', 'broadcast'].includes(dlavieCmd)) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Command ini khusus owner.')
+        return
+      }
+    }
+
+    if (dlavieCmd === 'ban') {
+      const target = dlavieArgs[0]
+      if (!target) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Gunakan: .ban 628xxxx')
+        return
+      }
+      const num = target.replace(/[^0-9]/g, '')
+      dlavieStore.banned.add(num)
+      dlavieSaveStore()
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, `Banned: ${num}`)
+      return
+    }
+
+    if (dlavieCmd === 'unban') {
+      const target = dlavieArgs[0]
+      if (!target) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Gunakan: .unban 628xxxx')
+        return
+      }
+      const num = target.replace(/[^0-9]/g, '')
+      dlavieStore.banned.delete(num)
+      dlavieSaveStore()
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, `Unbanned: ${num}`)
+      return
+    }
+
+    if (dlavieCmd === 'listban') {
+      const list = Array.from(dlavieStore.banned)
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, list.length ? `Banned users:\n${list.join('\n')}` : 'Tidak ada user yang dibanned.')
+      return
+    }
+
+    if (dlavieCmd === 'broadcast') {
+      const text = dlavieArgs.join(' ')
+      if (!text) {
+        await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Gunakan: .broadcast pesan')
+        return
+      }
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Broadcast sedang dikirim...')
+      const groups = Object.keys(await dlavieSock.groupFetchAllParticipating() || {})
+      let sent = 0
+      for (const gid of groups) {
+        try {
+          await dlavieSendText(dlavieSock, gid, `[BROADCAST]\n${text}`)
+          sent++
+          await new Promise((r) => setTimeout(r, 1500))
+        } catch (e) {
+          // skip failed
+        }
+      }
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, `Broadcast selesai. Terkirim ke ${sent} grup.`)
+      return
+    }
+
+    if (dlavieCmd === 'restart') {
+      await dlavieSendText(dlavieSock, dlavieRemoteJid, 'Bot sedang restart...')
+      setTimeout(() => process.exit(0), 2000)
+      return
+    }
+
+    // Unknown command
+    await dlavieSendText(dlavieSock, dlavieRemoteJid, `Command tidak dikenali. Ketik ${dlavieConfig.prefix}menu untuk melihat daftar command.`)
+  })
+
+  // Anti-delete: listen for message updates
+  dlavieSock.ev.on('messages.update', async (updates) => {
+    for (const update of updates) {
+      if (update.update?.message === null && dlavieStore.antidelete.has(update.key.remoteJid)) {
+        const key = `${update.key.remoteJid}:${update.key.id}`
+        const deletedMsg = dlavieStore.messages.get(key)
+        if (deletedMsg) {
+          const text = deletedMsg.message.conversation || deletedMsg.message.extendedTextMessage?.text || '[pesan non-teks]'
+          try {
+            await dlavieSendText(dlavieSock, update.key.remoteJid, `[ANTI-DELETE]\nPesan dihapus oleh @${update.key.participant?.split('@')[0] || 'unknown'}\n\n${text}`)
+          } catch (e) {
+            // silent
+          }
+        }
+      }
     }
   })
 }
