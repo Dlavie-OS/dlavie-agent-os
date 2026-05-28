@@ -1,0 +1,32 @@
+Dlavie Guard Policy v1
+
+Tujuan:
+- Mengurangi risiko nomor bot dibatasi karena aktivitas berlebihan.
+- Membatasi command flood dari user.
+- Membatasi output per chat dan global.
+- Menghindari pengiriman teks duplikat berulang.
+- Menahan broadcast berlebihan.
+
+Default:
+- globalWindowMs: 60000
+- globalMaxOut: 18
+- chatWindowMs: 60000
+- chatMaxOut: 6
+- userWindowMs: 30000
+- userMaxCmd: 8
+- minReplyDelayMs: 900
+- maxReplyDelayMs: 2800
+- duplicateWindowMs: 120000
+- maxDuplicateText: 2
+- broadcastGapMs: 5000
+- maxBroadcastTargets: 20
+
+Emergency commands:
+- test
+- status
+- runtime
+
+Risk commands:
+- broadcast
+- tagall
+- hidetag
