@@ -20,17 +20,21 @@ args = "Start application"
 name = "Start application"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node dlavie-runner"
-waitForPort = 3000
-
-[workflows.workflow.metadata]
-outputType = "console"
+waitForPort = 9000
 
 [[ports]]
 localPort = 3000
 externalPort = 80
+
+[[ports]]
+localPort = 9000
+externalPort = 9000
 
 [agent]
 expertMode = true

@@ -14,7 +14,7 @@ const dlavieConfig = {
   usePairingCode: dlavieEnv('DLAVIE_USE_PAIRING_CODE', 'true') === 'true',
   ownerNumbers: dlavieEnv('DLAVIE_OWNER_NUMBERS', '').split(',').map((x) => x.trim()).filter(Boolean),
   sessionPath: dlavieEnv('DLAVIE_SESSION_PATH', dlaviePath.join(dlavieProcess.cwd(), 'dlavie.session')),
-  port: Number(dlavieEnv('PORT', '3000'))
+  port: Number(dlavieEnv('PORT', '9000'))
 }
 
 function dlavieStartPreviewServer() {
@@ -80,11 +80,12 @@ async function dlavieMain() {
   const dlavieSock = makeWASocket({
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['Chrome (Mac OS)', 'Desktop', '10.0.0'],
+    browser: ['Ubuntu', 'Chrome', '20.0.04'],
     keepAliveIntervalMs: 30000,
     connectTimeoutMs: 30000,
     defaultQueryTimeoutMs: 30000,
-    markOnlineOnConnect: false
+    markOnlineOnConnect: true,
+    syncFullHistory: false
   })
 
   dlavieSock.ev.on('creds.update', saveCreds)
