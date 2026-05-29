@@ -2,7 +2,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const dlavieGuardDefaultPolicy = Object.freeze({
-  version: 'dlavie-guard-system-v1',
+  version: 'dlavie-guard-system-v2-owner-resolver',
   enabled: true,
   globalWindowMs: 60000,
   globalMaxOutput: 18,
@@ -17,13 +17,52 @@ const dlavieGuardDefaultPolicy = Object.freeze({
   maxTextLength: 3500,
   maxTargetsPerBatch: 20,
   broadcastGapMs: 5000,
-  emergencyCommands: ['test', 'status', 'runtime'],
+  emergencyCommands: ['test', 'status', 'runtime', 'whoami'],
   sensitiveCommands: ['broadcast', 'tagall', 'hidetag'],
   trustedRoles: ['owner', 'admin']
 })
 
 function dlavieGuardNumber(value = '') {
   return String(value).split('@')[0].replace(/[^0-9]/g, '')
+}
+
+function dlavieGuardToken(value = '') {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/:\d+@/g, '@')
+}
+
+function dlavieGuardList(value = '') {
+  return String(value)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function dlavieGuardOwnerRecords(values = []) {
+  return Array.from(new Set(values.filter(Boolean))).map((raw) => ({
+    raw: String(raw),
+    token: dlavieGuardToken(raw),
+    number: dlavieGuardNumber(raw)
+  }))
+}
+
+function dlavieGuardCandidates(ctx = {}) {
+  if (typeof ctx === 'string') return [ctx]
+  const key = ctx.key || {}
+  return [
+    ctx.jid,
+    ctx.sender,
+    ctx.participant,
+    ctx.remoteJid,
+    ctx.from,
+    key.remoteJid,
+    key.participant,
+    ctx.author,
+    ctx.ownerAlias,
+    ctx.ownerJid
+  ].filter(Boolean)
 }
 
 function dlavieGuardWait(ms) {
@@ -91,21 +130,46 @@ function dlavieCreateQueue(policy) {
 }
 
 function dlavieCreateRoleResolver(config = {}) {
-  const owners = Array.isArray(config.owners) ? config.owners : []
+  const configuredOwners = Array.isArray(config.owners) ? config.owners : []
+  const configuredAliases = Array.isArray(config.ownerAliases) ? config.ownerAliases : []
+  const envOwners = dlavieGuardList(process.env.DLAVIE_OWNER_NUMBERS || '')
+  const envAliases = dlavieGuardList(process.env.DLAVIE_OWNER_ALIASES || '')
+  const owners = dlavieGuardOwnerRecords([
+    ...configuredOwners,
+    ...configuredAliases,
+    ...envOwners,
+    ...envAliases
+  ])
 
-  function isOwner(jid = '') {
-    const n = dlavieGuardNumber(jid)
-    return owners.some((owner) => n === dlavieGuardNumber(owner) || n.includes(dlavieGuardNumber(owner)))
+  function isOwner(ctx = '') {
+    const candidates = dlavieGuardCandidates(ctx)
+
+    return candidates.some((candidate) => {
+      const candidateToken = dlavieGuardToken(candidate)
+      const candidateNumber = dlavieGuardNumber(candidate)
+
+      return owners.some((owner) => {
+        if (!owner.raw) return false
+        if (owner.token && candidateToken && owner.token === candidateToken) return true
+        if (owner.number && candidateNumber && owner.number === candidateNumber) return true
+        if (owner.number && candidateNumber && candidateNumber.endsWith(owner.number)) return true
+        if (owner.number && candidateNumber && owner.number.endsWith(candidateNumber)) return true
+        return false
+      })
+    })
   }
 
   async function isGroupAdmin(sock, groupJid, senderJid) {
     if (!String(groupJid).endsWith('@g.us')) return false
     try {
       const meta = await sock.groupMetadata(groupJid)
-      const sender = dlavieGuardNumber(senderJid)
+      const senderNumber = dlavieGuardNumber(senderJid)
+      const senderToken = dlavieGuardToken(senderJid)
       return meta.participants.some((p) => {
-        const id = dlavieGuardNumber(p.id)
-        return id === sender && (p.admin === 'admin' || p.admin === 'superadmin')
+        const idNumber = dlavieGuardNumber(p.id)
+        const idToken = dlavieGuardToken(p.id)
+        const sameSender = (senderNumber && idNumber === senderNumber) || (senderToken && idToken === senderToken)
+        return sameSender && (p.admin === 'admin' || p.admin === 'superadmin')
       })
     } catch (error) {
       return false
@@ -115,13 +179,26 @@ function dlavieCreateRoleResolver(config = {}) {
   async function resolve(sock, ctx = {}) {
     if (ctx.isOwner === true) return { role: 'owner', isOwner: true, isAdmin: true }
     if (ctx.isAdmin === true) return { role: 'admin', isOwner: false, isAdmin: true }
-    if (isOwner(ctx.sender || ctx.jid || '')) return { role: 'owner', isOwner: true, isAdmin: true }
-    const admin = await isGroupAdmin(sock, ctx.jid || '', ctx.sender || '')
+    if (isOwner(ctx)) return { role: 'owner', isOwner: true, isAdmin: true }
+    const admin = await isGroupAdmin(sock, ctx.jid || ctx.remoteJid || '', ctx.sender || ctx.participant || '')
     if (admin) return { role: 'admin', isOwner: false, isAdmin: true }
     return { role: 'user', isOwner: false, isAdmin: false }
   }
 
-  return { isOwner, isGroupAdmin, resolve }
+  function debug(ctx = {}) {
+    const candidates = dlavieGuardCandidates(ctx)
+    return {
+      owners: owners.map((owner) => ({ raw: owner.raw, token: owner.token, number: owner.number })),
+      candidates: candidates.map((candidate) => ({
+        raw: String(candidate),
+        token: dlavieGuardToken(candidate),
+        number: dlavieGuardNumber(candidate)
+      })),
+      matched: isOwner(ctx)
+    }
+  }
+
+  return { isOwner, isGroupAdmin, resolve, debug }
 }
 
 function dlavieRiskScan(policy, ctx = {}) {
@@ -143,7 +220,10 @@ function dlavieCreateGuardSystem(options = {}) {
   const policy = { ...dlavieGuardDefaultPolicy, ...(options.policy || {}) }
   const audit = dlavieCreateAuditLogger(options.auditFile || 'dlavie.guard.audit.log')
   const queue = dlavieCreateQueue(policy)
-  const roleResolver = dlavieCreateRoleResolver({ owners: options.owners || [] })
+  const roleResolver = dlavieCreateRoleResolver({
+    owners: options.owners || [],
+    ownerAliases: options.ownerAliases || []
+  })
 
   const globalOut = new Map()
   const chatOut = new Map()
@@ -171,7 +251,7 @@ function dlavieCreateGuardSystem(options = {}) {
     }
     if (emergencyDecision(ctx.cmd)) return { ok: true, reason: 'emergency_command' }
 
-    const key = dlavieGuardNumber(ctx.sender || ctx.jid || 'unknown') || 'unknown'
+    const key = dlavieGuardNumber(ctx.sender || ctx.jid || 'unknown') || dlavieGuardToken(ctx.sender || ctx.jid || 'unknown') || 'unknown'
     const count = dlavieGuardHit(userCmd, key, policy.userWindowMs)
     if (count > policy.userMaxCommand) {
       const decision = { ok: false, reason: 'user_command_rate_limited', count }
@@ -284,5 +364,7 @@ module.exports = {
   dlavieGuardDefaultPolicy,
   dlavieCreateGuardSystem,
   dlavieCreateRoleResolver,
-  dlavieGuardNumber
+  dlavieGuardNumber,
+  dlavieGuardToken,
+  dlavieGuardCandidates
 }
